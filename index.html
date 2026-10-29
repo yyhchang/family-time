@@ -57,10 +57,16 @@
   function 讀取網址() { try { return localStorage.getItem(儲存鍵) || ''; } catch (錯誤) { return ''; } }
   function 主畫面模式() { return window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches; }
 
+  // 接受一般網址與 Google Workspace 網域網址（/a/macros/網域/s/…），一律存成一般網址，免登入網域帳號
+  function 整理網址(文字) {
+    const 結果 = String(文字 || '').trim().match(/^https:\/\/script\.google\.com\/(?:a\/macros\/[^\/\s]+|macros)\/s\/([A-Za-z0-9_-]{20,})\/(exec|dev)(?:[?#].*)?$/);
+    return 結果 ? 'https://script.google.com/macros/s/' + 結果[1] + '/' + 結果[2] : '';
+  }
+
   function 儲存網址() {
-    const 值 = document.getElementById('網址').value.trim();
+    const 值 = 整理網址(document.getElementById('網址').value);
     const 錯誤 = document.getElementById('設定錯誤');
-    if (!網址格式.test(值)) { 錯誤.textContent = '網址格式不正確，請貼上 https://script.google.com/macros/s/ 開頭、/exec 結尾的網址。'; 錯誤.hidden = false; return; }
+    if (!值) { 錯誤.textContent = '網址格式不正確，請貼上 https://script.google.com/ 開頭、/exec 結尾的家庭時間簿網址。'; 錯誤.hidden = false; return; }
     try { localStorage.setItem(儲存鍵, 值); } catch (例外) { 錯誤.textContent = '這台裝置無法儲存設定，請確認沒有使用私密瀏覽。'; 錯誤.hidden = false; return; }
     啟動();
   }
