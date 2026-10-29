@@ -2,9 +2,132 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="家庭時間簿">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#f4f7f6">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
 <title>家庭時間簿</title>
-<style>body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:-apple-system,"PingFang TC",sans-serif;background:#f1f5f9;color:#1e3a5f}</style>
+<style>
+  :root { --深藍: #1a3f5f; --底色: #f4f7f6; --邊框: #dfe6e9; --淡字: #5b6b75; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--底色); color: var(--深藍); font-family: -apple-system, "PingFang TC", "Noto Sans TC", sans-serif; }
+  #應用 { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; display: none; }
+  #設定頁 { display: none; min-height: 100%; padding: 32px 16px; }
+  .卡片 { max-width: 560px; margin: 0 auto; background: #fff; border: 1px solid var(--邊框); border-radius: 20px; padding: 24px; }
+  h1 { font-size: 22px; margin: 0 0 12px; }
+  p { line-height: 1.6; margin: 8px 0; }
+  .淡 { color: var(--淡字); font-size: 14px; }
+  label { display: block; font-weight: 700; margin: 16px 0 6px; }
+  input { width: 100%; font-size: 16px; padding: 12px; border: 1px solid var(--邊框); border-radius: 12px; }
+  button { font: inherit; font-weight: 700; border: 0; border-radius: 12px; padding: 12px 16px; cursor: pointer; }
+  .主要 { background: var(--深藍); color: #fff; width: 100%; margin-top: 16px; }
+  .錯誤 { color: #b42318; }
+  #提醒列 { position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); display: none; align-items: center; gap: 10px; background: #fff; border: 1px solid var(--邊框); border-radius: 16px; padding: 10px 12px; box-shadow: 0 6px 24px rgba(0,0,0,.12); z-index: 10; }
+  #提醒列 span { flex: 1; font-size: 15px; line-height: 1.4; }
+  #提醒列 .開啟 { background: var(--深藍); color: #fff; white-space: nowrap; }
+  #提醒列 .稍後 { background: #eef2f4; color: var(--深藍); white-space: nowrap; }
+</style>
+<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
 </head>
-<body><p>家庭時間簿（設定中）</p></body>
+<body>
+<section id="設定頁">
+  <div class="卡片">
+    <h1>家庭時間簿：第一次設定</h1>
+    <p>請貼上家庭時間簿的網址（Google Apps Script 的正式網址，結尾是 <code>/exec</code>）。網址只會存在這台 iPad，不會公開。</p>
+    <label for="網址">家庭時間簿網址</label>
+    <input id="網址" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://script.google.com/macros/s/…/exec">
+    <p id="設定錯誤" class="錯誤" hidden></p>
+    <button class="主要" onclick="儲存網址()">儲存並開啟</button>
+    <p class="淡">之後要換網址，請刪除主畫面上的「家庭時間簿」圖示後重新加入。</p>
+  </div>
+</section>
+<iframe id="應用" title="家庭時間簿" allow="clipboard-write"></iframe>
+<div id="提醒列" role="status"><span id="提醒文字"></span><button id="提醒按鈕" class="開啟" hidden onclick="開啟提醒()">🔔 開啟時間到提醒</button><button class="稍後" onclick="隱藏提醒列()">稍後</button></div>
+<script>
+  const 儲存鍵 = 'familyTimeAppUrl';
+  const 網址格式 = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]{20,}\/(exec|dev)$/;
+  const 應用來源 = /^https:\/\/([a-z0-9-]+\.)*(script\.google\.com|googleusercontent\.com)$/;
+  const 已連線視窗 = [];
+  let 推播代碼 = '';
+  let 已隱藏 = false;
+
+  function 讀取網址() { try { return localStorage.getItem(儲存鍵) || ''; } catch (錯誤) { return ''; } }
+  function 主畫面模式() { return window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches; }
+
+  function 儲存網址() {
+    const 值 = document.getElementById('網址').value.trim();
+    const 錯誤 = document.getElementById('設定錯誤');
+    if (!網址格式.test(值)) { 錯誤.textContent = '網址格式不正確，請貼上 https://script.google.com/macros/s/ 開頭、/exec 結尾的網址。'; 錯誤.hidden = false; return; }
+    try { localStorage.setItem(儲存鍵, 值); } catch (例外) { 錯誤.textContent = '這台裝置無法儲存設定，請確認沒有使用私密瀏覽。'; 錯誤.hidden = false; return; }
+    啟動();
+  }
+
+  function 啟動() {
+    const 網址 = 讀取網址();
+    if (!網址格式.test(網址)) { document.getElementById('設定頁').style.display = 'block'; return; }
+    document.getElementById('設定頁').style.display = 'none';
+    const 框 = document.getElementById('應用');
+    框.src = 網址;
+    框.style.display = 'block';
+    更新提醒列();
+  }
+
+  function 通知家庭時間簿() {
+    已連線視窗.forEach(([視窗, 來源]) => { try { 視窗.postMessage({ type: 'family-time-push', id: 推播代碼 }, 來源); } catch (錯誤) {} });
+  }
+
+  window.addEventListener('message', 事件 => {
+    if (!應用來源.test(事件.origin) || !事件.data || 事件.data.type !== 'family-time-hello' || !事件.source) return;
+    if (!已連線視窗.some(([視窗]) => 視窗 === 事件.source)) 已連線視窗.push([事件.source, 事件.origin]);
+    try { 事件.source.postMessage({ type: 'family-time-push', id: 推播代碼 }, 事件.origin); } catch (錯誤) {}
+  });
+
+  function 顯示提醒列(文字, 顯示按鈕) {
+    const 列 = document.getElementById('提醒列');
+    if (已隱藏 || !文字) { 列.style.display = 'none'; return; }
+    document.getElementById('提醒文字').textContent = 文字;
+    document.getElementById('提醒按鈕').hidden = !顯示按鈕;
+    列.style.display = 'flex';
+  }
+  function 隱藏提醒列() { 已隱藏 = true; document.getElementById('提醒列').style.display = 'none'; }
+
+  function 更新提醒列() {
+    if (!讀取網址()) return;
+    if (推播代碼) return 顯示提醒列('', false);
+    if (!主畫面模式()) return 顯示提醒列('要收「時間到」提醒，請按「分享 → 加入主畫面」，再從主畫面的圖示開啟。', false);
+    if (!('Notification' in window)) return 顯示提醒列('這台 iPad 的系統版本太舊，收不到提醒（需要 iPadOS 16.4 以上）。', false);
+    if (Notification.permission === 'denied') return 顯示提醒列('通知已被關閉。請到 iPad「設定 → 通知 → 家庭時間簿」開啟。', false);
+    顯示提醒列('開啟後，3C 時間快到與時間到時，這台 iPad 會跳出提醒。', true);
+  }
+
+  function 開啟提醒() {
+    // iPad 只在使用者按下的當下允許詢問通知，因此直接呼叫，不經過延遲佇列
+    if (!window.OneSignal || !window.OneSignal.Notifications) return 顯示提醒列('提醒功能還在載入，請等幾秒再按一次。', true);
+    window.OneSignal.Notifications.requestPermission().catch(() => {}).finally(() => setTimeout(更新提醒列, 800));
+  }
+
+  window.OneSignalDeferred = window.OneSignalDeferred || [];
+  OneSignalDeferred.push(async function (OneSignal) {
+    await OneSignal.init({
+      appId: 'a1f9c542-09fa-40f3-a4f3-ea6b39a3c1b8',
+      safari_web_id: 'web.onesignal.auto.2d55a779-27e1-4bb7-a896-7e19803bedb7',
+      serviceWorkerPath: 'family-time/OneSignalSDKWorker.js',
+      serviceWorkerParam: { scope: '/family-time/' },
+    });
+    const 套用 = () => {
+      const 訂閱 = OneSignal.User.PushSubscription;
+      推播代碼 = 訂閱.optedIn && 訂閱.id ? 訂閱.id : '';
+      通知家庭時間簿();
+      更新提醒列();
+    };
+    OneSignal.User.PushSubscription.addEventListener('change', 套用);
+    套用();
+  });
+
+  啟動();
+</script>
+</body>
 </html>
